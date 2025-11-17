@@ -91,6 +91,8 @@ if args.hotword_path is not None and os.path.exists(args.hotword_path):
 
 @app.post("/recognition")
 async def api_recognition(audio: UploadFile = File(..., description="audio file")):
+    import time
+    print(f"time1: {time.time()}")
     suffix = audio.filename.split(".")[-1]
     audio_path = f"{args.temp_dir}/{str(uuid.uuid1())}.{suffix}"
     async with aiofiles.open(audio_path, "wb") as out_file:
@@ -105,8 +107,9 @@ async def api_recognition(audio: UploadFile = File(..., description="audio file"
     except Exception as e:
         logger.error(f"读取音频文件发生错误，错误信息：{e}")
         return {"msg": "读取音频文件发生错误", "code": 1}
+    print(f"time2: {time.time()}")
     rec_results = model.generate(input=audio_bytes, is_final=True, **param_dict)
-    print(f"rec_results: {rec_results}")
+    print(f"time3: {time.time()}")
     # 结果为空
     if len(rec_results[0]["text"] ) == 0:
         return {"text": "", "sentences": [], "code": 0}
