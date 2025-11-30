@@ -191,19 +191,32 @@ async def call_asr_service(
         chunk_num = (len(audio_bytes) - 1) // stride + 1
         
         # 创建接收消息的任务
+        received_final = False
+        
         async def receive_messages():
-            while True:
-                try:
-                    msg = await websocket.recv()
-                    msg_dict = json.loads(msg)
-                    results.append(msg_dict)
-                    logger.info(f"收到识别结果: {msg_dict.get('text', '')}")
-                    
-                    if msg_dict.get("is_final", False) and mode == "offline":
+            nonlocal received_final
+            try:
+                while True:
+                    try:
+                        # 添加超时机制，避免无限等待
+                        msg = await asyncio.wait_for(websocket.recv(), timeout=30.0)
+                        msg_dict = json.loads(msg)
+                        results.append(msg_dict)
+                        logger.info(f"收到识别结果: {msg_dict.get('text', '')}")
+                        
+                        # 检查是否是最终结果
+                        if msg_dict.get("is_final", False):
+                            logger.info("收到最终结果标志")
+                            received_final = True
+                            break
+                    except asyncio.TimeoutError:
+                        logger.warning("接收消息超时，退出接收循环")
                         break
-                except Exception as e:
-                    logger.error(f"接收消息错误: {e}")
-                    break
+                    except websockets.exceptions.ConnectionClosed:
+                        logger.info("WebSocket 连接已关闭")
+                        break
+            except Exception as e:
+                logger.error(f"接收消息错误: {e}")
         
         recv_task = asyncio.create_task(receive_messages())
         
@@ -217,16 +230,31 @@ async def call_asr_service(
                 is_speaking = False
                 message = json.dumps({"is_speaking": is_speaking})
                 await websocket.send(message)
+                logger.info("音频数据发送完成，等待识别结果...")
             
             sleep_duration = 0.001 if mode == "offline" else 60 * chunk_size[1] / chunk_interval / 1000
             await asyncio.sleep(sleep_duration)
         
         # 等待接收完所有消息
-        if mode == "offline":
-            await asyncio.sleep(1)
-            await recv_task
-        else:
-            await asyncio.sleep(2)
+        try:
+            if mode == "offline":
+                # 等待接收任务完成，最多等待30秒
+                await asyncio.wait_for(recv_task, timeout=30.0)
+            else:
+                await asyncio.sleep(2)
+                # 取消接收任务
+                recv_task.cancel()
+                try:
+                    await recv_task
+                except asyncio.CancelledError:
+                    pass
+        except asyncio.TimeoutError:
+            logger.warning("等待识别结果超时")
+            recv_task.cancel()
+            try:
+                await recv_task
+            except asyncio.CancelledError:
+                pass
     
     # 计算耗时
     elapsed_time = time.time() - start_time
