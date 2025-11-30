@@ -12,6 +12,8 @@ import logging
 import websockets
 import ssl as ssl_module
 import wave
+import signal
+import atexit
 from pathlib import Path
 from typing import Optional
 from queue import Queue
@@ -52,13 +54,15 @@ def start_backend_service():
     
     logger.info("正在启动后端 ASR 服务...")
     
+    # 使用 preexec_fn 创建新的进程组，这样可以终止整个进程树
     backend_process = subprocess.Popen(
         cmd,
         shell=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         universal_newlines=True,
-        bufsize=1
+        bufsize=1,
+        preexec_fn=os.setsid  # 创建新的进程组
     )
     
     # 监控日志输出
@@ -330,8 +334,54 @@ async def shutdown_event():
     global backend_process
     if backend_process:
         logger.info("正在关闭后端服务...")
-        backend_process.terminate()
-        backend_process.wait()
+        try:
+            # 终止整个进程组
+            pgid = os.getpgid(backend_process.pid)
+            os.killpg(pgid, signal.SIGTERM)
+            
+            # 等待进程结束
+            try:
+                backend_process.wait(timeout=5)
+                logger.info("后端服务已正常关闭")
+            except subprocess.TimeoutExpired:
+                logger.warning("后端服务未在5秒内关闭，强制终止")
+                os.killpg(pgid, signal.SIGKILL)
+                backend_process.wait()
+                logger.info("后端服务已强制终止")
+        except Exception as e:
+            logger.error(f"关闭后端服务时出错: {e}")
+
+
+def cleanup_backend_process():
+    """清理后端进程（用于 atexit）"""
+    global backend_process
+    if backend_process and backend_process.poll() is None:
+        logger.info("清理后端进程...")
+        try:
+            pgid = os.getpgid(backend_process.pid)
+            os.killpg(pgid, signal.SIGTERM)
+            backend_process.wait(timeout=3)
+        except Exception as e:
+            logger.error(f"清理后端进程时出错: {e}")
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except:
+                pass
+
+
+def signal_handler(signum, frame):
+    """信号处理函数"""
+    logger.info(f"收到信号 {signum}，正在退出...")
+    cleanup_backend_process()
+    sys.exit(0)
+
+
+# 注册信号处理器
+signal.signal(signal.SIGINT, signal_handler)  # Ctrl+C
+signal.signal(signal.SIGTERM, signal_handler)  # 终止信号
+
+# 注册退出时的清理函数
+atexit.register(cleanup_backend_process)
 
 
 if __name__ == '__main__':
