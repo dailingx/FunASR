@@ -18,6 +18,12 @@ from pathlib import Path
 from typing import Optional
 from queue import Queue
 
+# 添加 /workspace 到 Python 路径
+if '/workspace' not in sys.path:
+    sys.path.insert(0, '/workspace')
+
+from nos.file_util import download_file_from_nos
+
 from fastapi import FastAPI, HTTPException, Form, Body
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
