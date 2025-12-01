@@ -22,7 +22,7 @@ from queue import Queue
 if '/workspace' not in sys.path:
     sys.path.insert(0, '/workspace')
 
-from nos.file_util import download_file_from_nos
+from nos_utils.file_util import download_file_from_nos
 
 from fastapi import FastAPI, HTTPException, Form, Body
 from fastapi.responses import JSONResponse
