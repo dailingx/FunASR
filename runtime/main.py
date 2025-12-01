@@ -18,8 +18,9 @@ from pathlib import Path
 from typing import Optional
 from queue import Queue
 
-from fastapi import FastAPI, HTTPException, Form
+from fastapi import FastAPI, HTTPException, Form, Body
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 import uvicorn
 
 # 配置日志
@@ -289,19 +290,18 @@ async def call_asr_service(
     }
 
 
+# 定义请求模型
+class ASRRequest(BaseModel):
+    audioNosKey: str
+
+
 @app.post("/asr")
-async def asr_recognize(
-    mode: str = Form("offline"),
-    use_itn: bool = Form(True),
-    hotword: str = Form(""),
-):
+async def asr_recognize(request: ASRRequest = Body(...)):
     """
     ASR 识别接口
     
     Args:
-        mode: 识别模式 (offline, online, 2pass)
-        use_itn: 是否使用反向文本正则化
-        hotword: 热词字符串或热词文件路径
+        request: 请求体，包含 audioNosKey 字段
     
     Returns:
         识别结果
@@ -309,15 +309,27 @@ async def asr_recognize(
     # 记录请求开始时间
     request_start_time = time.time()
     
+    logger.info(f"收到识别请求，audioNosKey: {request}")
+    
     if not backend_ready:
         raise HTTPException(status_code=503, detail="后端 ASR 服务尚未就绪，请稍后再试")
+
+    audio_nos_key = request.audioNosKey
     
-    # 固定音频文件路径
-    audio_path = "/workspace/test.mp3"
+    # 判断 audio_nos_key 是否为空
+    if not audio_nos_key or not audio_nos_key.strip():
+        raise HTTPException(status_code=400, detail="audioNosKey 参数不能为空")
+
+    # 获取文件名，如果没有后缀则添加 .mp3 后缀
+    audio_filename = audio_nos_key.split('/')[-1]
+    name, ext = os.path.splitext(audio_filename)
+    if not ext:
+        # 没有后缀，使用默认的 .mp3
+        audio_filename = f"{name}.mp3"
     
-    # 检查文件是否存在
-    if not os.path.exists(audio_path):
-        raise HTTPException(status_code=404, detail=f"音频文件不存在: {audio_path}")
+    audio_path = os.path.join('./asset', audio_filename)
+    download_success = download_file_from_nos(nos_key=spk_speech_nos, save_path=spk_prompt_speech_path)
+
     
     try:
         logger.info(f"开始识别音频文件: {audio_path}")
@@ -327,10 +339,7 @@ async def asr_recognize(
             audio_path=audio_path,
             host="127.0.0.1",
             port=10095,
-            mode=mode,
-            use_ssl=True,
-            use_itn=use_itn,
-            hotword=hotword
+            use_ssl=True
         )
         
         # 计算总耗时
