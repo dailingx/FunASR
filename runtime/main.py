@@ -202,21 +202,41 @@ async def call_asr_service(
                         msg = await asyncio.wait_for(websocket.recv(), timeout=30.0)
                         msg_dict = json.loads(msg)
                         results.append(msg_dict)
-                        logger.info(f"收到识别结果: {msg_dict.get('text', '')}")
+                        
+                        # 打印完整的消息内容用于调试
+                        logger.info(f"收到消息: is_final={msg_dict.get('is_final')}, "
+                                  f"mode={msg_dict.get('mode')}, "
+                                  f"text={msg_dict.get('text', '')[:50]}...")
                         
                         # 检查是否是最终结果
+                        # offline模式：收到包含text的消息就认为是最终结果
+                        if mode == "offline" and msg_dict.get("text", "").strip():
+                            logger.info("offline模式收到识别结果，准备结束")
+                            received_final = True
+                            # 再尝试接收一次，看是否还有消息
+                            try:
+                                extra_msg = await asyncio.wait_for(websocket.recv(), timeout=1.0)
+                                extra_dict = json.loads(extra_msg)
+                                results.append(extra_dict)
+                                logger.info(f"收到额外消息: {extra_dict}")
+                            except asyncio.TimeoutError:
+                                logger.info("没有更多消息")
+                            break
+                        
+                        # 也检查 is_final 标志
                         if msg_dict.get("is_final", False):
-                            logger.info("收到最终结果标志")
+                            logger.info("收到最终结果标志 (is_final=True)")
                             received_final = True
                             break
+                            
                     except asyncio.TimeoutError:
-                        logger.warning("接收消息超时，退出接收循环")
+                        logger.warning("接收单条消息超时")
                         break
                     except websockets.exceptions.ConnectionClosed:
                         logger.info("WebSocket 连接已关闭")
                         break
             except Exception as e:
-                logger.error(f"接收消息错误: {e}")
+                logger.error(f"接收消息错误: {e}", exc_info=True)
         
         recv_task = asyncio.create_task(receive_messages())
         
@@ -240,6 +260,7 @@ async def call_asr_service(
             if mode == "offline":
                 # 等待接收任务完成，最多等待30秒
                 await asyncio.wait_for(recv_task, timeout=30.0)
+                logger.info(f"接收任务完成，received_final={received_final}")
             else:
                 await asyncio.sleep(2)
                 # 取消接收任务
@@ -249,7 +270,7 @@ async def call_asr_service(
                 except asyncio.CancelledError:
                     pass
         except asyncio.TimeoutError:
-            logger.warning("等待识别结果超时")
+            logger.warning(f"等待识别结果超时（已收到 {len(results)} 条消息）")
             recv_task.cancel()
             try:
                 await recv_task
