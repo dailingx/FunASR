@@ -328,7 +328,7 @@ async def asr_recognize(request: ASRRequest = Body(...)):
         audio_filename = f"{name}.mp3"
     
     audio_path = os.path.join('./asset', audio_filename)
-    download_success = download_file_from_nos(nos_key=spk_speech_nos, save_path=spk_prompt_speech_path)
+    download_success = download_file_from_nos(nos_key=audio_nos_key, save_path=audio_path)
 
     
     try:
