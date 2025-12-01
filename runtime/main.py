@@ -333,7 +333,7 @@ async def asr_recognize(request: ASRRequest = Body(...)):
         # 没有后缀，使用默认的 .mp3
         audio_filename = f"{name}.mp3"
     
-    audio_path = os.path.join('./asset', audio_filename)
+    audio_path = os.path.join('/workspace/FunASR/runtime/asset', audio_filename)
     download_success = download_file_from_nos(nos_key=audio_nos_key, save_path=audio_path)
 
     # 检查文件下载是否成功
