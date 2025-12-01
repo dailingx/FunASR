@@ -315,7 +315,7 @@ async def asr_recognize(request: ASRRequest = Body(...)):
     # 记录请求开始时间
     request_start_time = time.time()
     
-    logger.info(f"收到识别请求，audioNosKey: {request}")
+    logger.info(f"收到识别请求，request: {request}")
     
     if not backend_ready:
         raise HTTPException(status_code=503, detail="后端 ASR 服务尚未就绪，请稍后再试")
@@ -338,7 +338,7 @@ async def asr_recognize(request: ASRRequest = Body(...)):
 
     # 检查文件下载是否成功
     if download_success is not True:
-        logger.error(f"文件下载失败，audioNosKey: {audio_nos_key}")
+        logger.error(f"文件下载失败，audioNosKey: {audio_nos_key}, 目标路径:{audio_path}")
         raise HTTPException(status_code=500, detail=f"文件下载失败: {audio_nos_key}")
     
     logger.info(f"文件下载成功: {audio_path}")
