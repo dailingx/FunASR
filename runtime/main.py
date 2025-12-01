@@ -336,6 +336,23 @@ async def asr_recognize(request: ASRRequest = Body(...)):
     audio_path = os.path.join('./asset', audio_filename)
     download_success = download_file_from_nos(nos_key=audio_nos_key, save_path=audio_path)
 
+    # 检查文件下载是否成功
+    if download_success is not True:
+        logger.error(f"文件下载失败，audioNosKey: {audio_nos_key}")
+        raise HTTPException(status_code=500, detail=f"文件下载失败: {audio_nos_key}")
+    
+    logger.info(f"文件下载成功: {audio_path}")
+    
+    # 定义异步删除文件的函数
+    async def delete_file_async(file_path: str):
+        """异步删除文件"""
+        await asyncio.sleep(0.1)  # 短暂延迟确保文件不在使用中
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                logger.info(f"已删除临时文件: {file_path}")
+        except Exception as e:
+            logger.error(f"删除文件失败: {file_path}, 错误: {e}")
     
     try:
         logger.info(f"开始识别音频文件: {audio_path}")
@@ -360,6 +377,10 @@ async def asr_recognize(request: ASRRequest = Body(...)):
     except Exception as e:
         logger.error(f"ASR 识别错误: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"ASR 识别失败: {str(e)}")
+    
+    finally:
+        # 无论成功还是失败，都异步删除文件
+        asyncio.create_task(delete_file_async(audio_path))
 
 
 @app.get("/health")
