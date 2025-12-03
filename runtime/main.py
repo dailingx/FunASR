@@ -14,6 +14,7 @@ import ssl as ssl_module
 import wave
 import signal
 import atexit
+import socket
 from pathlib import Path
 from typing import Optional
 from queue import Queue
@@ -41,6 +42,7 @@ app = FastAPI(title="FunASR API Service")
 # 全局变量
 backend_ready = False
 backend_process = None
+backend_restart_lock = threading.Lock()  # 防止并发重启
 
 
 def start_backend_service():
@@ -94,6 +96,105 @@ def start_backend_service():
     
     log_thread = threading.Thread(target=log_output, daemon=True)
     log_thread.start()
+
+
+def check_backend_health(host: str = "127.0.0.1", port: int = 10095) -> bool:
+    """
+    检查后端服务是否健康运行
+    
+    Args:
+        host: 服务地址
+        port: 服务端口
+    
+    Returns:
+        True 如果服务健康，False 否则
+    """
+    global backend_process, backend_ready
+    
+    # 检查1: 进程是否存在且运行中
+    if backend_process is None:
+        logger.warning("后端进程对象不存在")
+        return False
+    
+    # 检查进程是否还在运行
+    if backend_process.poll() is not None:
+        logger.warning(f"后端进程已退出，返回码: {backend_process.poll()}")
+        backend_ready = False
+        return False
+    
+    # 检查2: 端口是否可连接
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(2)  # 2秒超时
+        result = sock.connect_ex((host, port))
+        sock.close()
+        if result == 0:
+            return True
+        else:
+            logger.warning(f"端口 {port} 无法连接")
+            return False
+    except Exception as e:
+        logger.warning(f"检查端口连接时出错: {e}")
+        return False
+
+
+def restart_backend_service():
+    """
+    重启后端服务
+    """
+    global backend_process, backend_ready, backend_restart_lock
+    
+    # 使用锁防止并发重启
+    if not backend_restart_lock.acquire(blocking=False):
+        logger.info("后端服务正在重启中，跳过本次重启请求")
+        return False
+    
+    try:
+        logger.info("检测到后端服务异常，开始重启...")
+        
+        # 清理旧进程
+        if backend_process is not None:
+            try:
+                if backend_process.poll() is None:
+                    # 进程还在运行，先终止
+                    logger.info("正在终止旧的后端进程...")
+                    pgid = os.getpgid(backend_process.pid)
+                    os.killpg(pgid, signal.SIGTERM)
+                    # 等待进程结束
+                    try:
+                        backend_process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        logger.warning("进程未在5秒内结束，强制终止")
+                        os.killpg(pgid, signal.SIGKILL)
+                        backend_process.wait()
+            except Exception as e:
+                logger.warning(f"清理旧进程时出错: {e}")
+        
+        # 重置状态
+        backend_ready = False
+        backend_process = None
+        
+        # 重新启动
+        start_backend_service()
+        
+        # 等待服务就绪（最多等待60秒）
+        max_wait = 60
+        start_time = time.time()
+        while not backend_ready and (time.time() - start_time) < max_wait:
+            time.sleep(1)
+        
+        if backend_ready:
+            logger.info("后端服务重启成功！")
+            return True
+        else:
+            logger.error("后端服务重启超时！")
+            return False
+            
+    except Exception as e:
+        logger.error(f"重启后端服务时出错: {e}", exc_info=True)
+        return False
+    finally:
+        backend_restart_lock.release()
 
 
 async def call_asr_service(
@@ -180,9 +281,58 @@ async def call_asr_service(
     
     results = []
     
-    async with websockets.connect(
-        uri, subprotocols=["binary"], ping_interval=None, ssl=ssl_context
-    ) as websocket:
+    # 尝试连接，如果失败则检查服务状态并重启
+    max_retries = 2
+    websocket = None
+    for retry in range(max_retries):
+        try:
+            websocket = await websockets.connect(
+                uri, 
+                subprotocols=["binary"], 
+                ping_interval=None, 
+                ssl=ssl_context,
+                open_timeout=60.0  # 连接超时60秒
+            )
+            logger.info("成功连接到后端服务")
+            break  # 连接成功，跳出重试循环
+        except (websockets.exceptions.InvalidStatusCode, 
+                websockets.exceptions.ConnectionClosedError,
+                websockets.exceptions.SecurityError,
+                asyncio.TimeoutError,
+                OSError,
+                Exception) as e:
+            logger.warning(f"连接后端服务失败 (尝试 {retry + 1}/{max_retries}): {e}")
+            
+            if retry < max_retries - 1:
+                # 检查服务健康状态
+                is_healthy = check_backend_health(host, port)
+                if not is_healthy:
+                    logger.warning("后端服务不健康，尝试重启...")
+                    # 在后台线程中重启（避免阻塞）
+                    restart_thread = threading.Thread(target=restart_backend_service, daemon=True)
+                    restart_thread.start()
+                    # 等待重启完成（最多等待60秒）
+                    restart_thread.join(timeout=60)
+                    
+                    if backend_ready:
+                        logger.info("后端服务已重启，重试连接...")
+                        await asyncio.sleep(2)  # 等待服务稳定
+                        continue
+                    else:
+                        logger.error("后端服务重启失败")
+                        raise Exception("后端服务重启失败，无法连接")
+                else:
+                    logger.info("服务健康但连接失败，可能是临时网络问题，稍后重试...")
+                    await asyncio.sleep(2)
+                    continue
+            else:
+                # 最后一次重试也失败了
+                raise Exception(f"连接后端服务失败，已重试 {max_retries} 次: {e}")
+    
+    if websocket is None:
+        raise Exception("无法建立WebSocket连接")
+    
+    try:
         
         # 发送配置信息
         message = json.dumps({
@@ -290,6 +440,13 @@ async def call_asr_service(
                 await recv_task
             except asyncio.CancelledError:
                 pass
+    finally:
+        # 确保关闭WebSocket连接
+        if websocket is not None:
+            try:
+                await websocket.close()
+            except Exception as e:
+                logger.warning(f"关闭WebSocket连接时出错: {e}")
     
     # 计算耗时
     elapsed_time = time.time() - start_time
