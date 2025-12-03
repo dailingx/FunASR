@@ -68,6 +68,8 @@ def start_backend_service():
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         universal_newlines=True,
+        encoding='utf-8',
+        errors='replace',  # 遇到解码错误时用替换字符代替，避免崩溃
         bufsize=1,
         preexec_fn=os.setsid  # 创建新的进程组
     )
@@ -82,8 +84,13 @@ def start_backend_service():
     
     # 继续输出剩余日志（在后台线程中）
     def log_output():
-        for line in backend_process.stdout:
-            logger.info(f"后端服务: {line.strip()}")
+        try:
+            for line in backend_process.stdout:
+                logger.info(f"后端服务: {line.strip()}")
+        except UnicodeDecodeError as e:
+            logger.warning(f"日志解码错误（已忽略）: {e}")
+        except Exception as e:
+            logger.error(f"读取后端日志时出错: {e}")
     
     log_thread = threading.Thread(target=log_output, daemon=True)
     log_thread.start()
