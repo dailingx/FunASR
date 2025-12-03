@@ -300,6 +300,7 @@ async def call_asr_service(
 class ASRRequest(BaseModel):
     audioNosKey: str
     taskId: str
+    hotword: str
 
 
 @app.post("/asr")
@@ -364,7 +365,8 @@ async def asr_recognize(request: ASRRequest = Body(...)):
             audio_path=audio_path,
             host="127.0.0.1",
             port=10095,
-            use_ssl=True
+            use_ssl=True,
+            hotword=request.hotword
         )
         
         # 计算总耗时
