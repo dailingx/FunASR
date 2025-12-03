@@ -142,22 +142,22 @@ async def call_asr_service(
             audio_bytes = f.read()
     
     # 处理热词
-    hotword_msg = ""
-    if hotword.strip() != "":
-        if os.path.exists(hotword):
-            fst_dict = {}
-            with open(hotword, encoding="utf-8") as f:
-                hot_lines = f.readlines()
-                for line in hot_lines:
-                    words = line.strip().split(" ")
-                    if len(words) >= 2:
-                        try:
-                            fst_dict[" ".join(words[:-1])] = int(words[-1])
-                        except ValueError:
-                            pass
-            hotword_msg = json.dumps(fst_dict)
-        else:
-            hotword_msg = hotword
+    # hotword_msg = ""
+    # if hotword.strip() != "":
+    #     if os.path.exists(hotword):
+    #         fst_dict = {}
+    #         with open(hotword, encoding="utf-8") as f:
+    #             hot_lines = f.readlines()
+    #             for line in hot_lines:
+    #                 words = line.strip().split(" ")
+    #                 if len(words) >= 2:
+    #                     try:
+    #                         fst_dict[" ".join(words[:-1])] = int(words[-1])
+    #                     except ValueError:
+    #                         pass
+    #         hotword_msg = json.dumps(fst_dict)
+    #     else:
+    #         hotword_msg = hotword
     
     # 建立 websocket 连接
     if use_ssl:
@@ -188,7 +188,7 @@ async def call_asr_service(
             "wav_name": os.path.basename(audio_path),
             "wav_format": wav_format,
             "is_speaking": True,
-            "hotwords": hotword_msg,
+            "hotwords": hotword,
             "itn": use_itn,
         })
         await websocket.send(message)
