@@ -205,8 +205,8 @@ async def call_asr_service(
             try:
                 while True:
                     try:
-                        # 添加超时机制，避免无限等待
-                        msg = await asyncio.wait_for(websocket.recv(), timeout=30.0)
+                        # 添加超时机制，避免无限等待（最大10分钟）
+                        msg = await asyncio.wait_for(websocket.recv(), timeout=600.0)
                         msg_dict = json.loads(msg)
                         results.append(msg_dict)
                         
@@ -265,8 +265,8 @@ async def call_asr_service(
         # 等待接收完所有消息
         try:
             if mode == "offline":
-                # 等待接收任务完成，最多等待30秒
-                await asyncio.wait_for(recv_task, timeout=30.0)
+                # 等待接收任务完成，最多等待10分钟
+                await asyncio.wait_for(recv_task, timeout=600.0)
                 logger.info(f"接收任务完成，received_final={received_final}")
             else:
                 await asyncio.sleep(2)
