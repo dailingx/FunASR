@@ -15,9 +15,11 @@ import wave
 import signal
 import atexit
 import socket
+import requests
 from pathlib import Path
 from typing import Optional
 from queue import Queue
+from urllib.parse import urlparse
 
 # 添加 /workspace 到 Python 路径
 if '/workspace' not in sys.path:
@@ -462,9 +464,10 @@ async def call_asr_service(
 
 # 定义请求模型
 class ASRRequest(BaseModel):
-    audioNosKey: str
+    audioUrl: str
     taskId: str
-    hotword: str
+    audioNosKey: Optional[str] = None
+    hotword: Optional[str] = ""
 
 
 @app.post("/asr")
@@ -486,29 +489,58 @@ async def asr_recognize(request: ASRRequest = Body(...)):
     if not backend_ready:
         raise HTTPException(status_code=503, detail="后端 ASR 服务尚未就绪，请稍后再试")
 
-    audio_nos_key = request.audioNosKey
+    audioUrl = request.audioUrl
     task_id = request.taskId
+    audio_nos_key = request.audioNosKey
+    hotword = request.hotword or ""
     
-    # 判断 audio_nos_key 是否为空
-    if not audio_nos_key or not audio_nos_key.strip():
-        raise HTTPException(status_code=400, detail="audioNosKey 参数不能为空")
+    # 参数验证
+    if not audioUrl or not audioUrl.strip():
+        raise HTTPException(status_code=400, detail="audioUrl 参数不能为空")
     if not task_id or not task_id.strip():
         raise HTTPException(status_code=400, detail="taskId 参数不能为空")
 
-    # 获取文件名，如果没有后缀则添加 .mp3 后缀
-    audio_filename = audio_nos_key.split('/')[-1]
+    # 获取文件名
+    # 优先使用 audioNosKey 中的文件名，否则从 URL 中提取
+    if audio_nos_key and audio_nos_key.strip():
+        audio_filename = audio_nos_key.split('/')[-1]
+    else:
+        # 从 URL 中提取文件名
+        parsed_url = urlparse(audioUrl)
+        audio_filename = os.path.basename(parsed_url.path)
+        if not audio_filename:
+            # 如果 URL 中没有文件名，使用 task_id 作为文件名
+            audio_filename = f"{task_id}.mp3"
+    
+    # 确保文件名有扩展名，如果没有则添加 .mp3
     name, ext = os.path.splitext(audio_filename)
     if not ext:
-        # 没有后缀，使用默认的 .mp3
         audio_filename = f"{name}.mp3"
     
     audio_path = os.path.join('/workspace/FunASR/runtime/asset', audio_filename)
-    download_success = download_file_from_nos(nos_key=audio_nos_key, save_path=audio_path)
-
-    # 检查文件下载是否成功
-    if download_success is not True:
-        logger.error(f"文件下载失败，audioNosKey: {audio_nos_key}, 目标路径:{audio_path}")
-        raise HTTPException(status_code=500, detail=f"文件下载失败: {audio_nos_key}")
+    
+    # 从 URL 下载音频文件
+    logger.info(f"开始从 URL 下载音频文件: {audioUrl}")
+    try:
+        response = requests.get(audioUrl, timeout=300, stream=True)  # 300秒超时
+        response.raise_for_status()  # 如果状态码不是200会抛出异常
+        
+        # 确保目录存在
+        os.makedirs(os.path.dirname(audio_path), exist_ok=True)
+        
+        # 下载文件
+        with open(audio_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+        
+        logger.info(f"文件下载成功: {audio_path}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"从 URL 下载文件失败: {audioUrl}, 错误: {e}")
+        raise HTTPException(status_code=500, detail=f"文件下载失败: {str(e)}")
+    except Exception as e:
+        logger.error(f"下载文件时发生未知错误: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"文件下载失败: {str(e)}")
 
     # 定义异步删除文件的函数
     async def delete_file_async(file_path: str):
@@ -530,7 +562,7 @@ async def asr_recognize(request: ASRRequest = Body(...)):
             host="127.0.0.1",
             port=10095,
             use_ssl=True,
-            hotword=request.hotword
+            hotword=hotword
         )
         
         # 计算总耗时
