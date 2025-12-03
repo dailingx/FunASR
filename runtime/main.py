@@ -291,7 +291,7 @@ async def call_asr_service(
     return {
         "success": True,
         "results": results,
-        "wav_name": os.path.basename(audio_path),
+        # "wav_name": os.path.basename(audio_path),
         "service_elapsed_time": round(elapsed_time, 3)
     }
 
@@ -299,6 +299,7 @@ async def call_asr_service(
 # 定义请求模型
 class ASRRequest(BaseModel):
     audioNosKey: str
+    taskId: str
 
 
 @app.post("/asr")
@@ -321,10 +322,13 @@ async def asr_recognize(request: ASRRequest = Body(...)):
         raise HTTPException(status_code=503, detail="后端 ASR 服务尚未就绪，请稍后再试")
 
     audio_nos_key = request.audioNosKey
+    task_id = request.taskId
     
     # 判断 audio_nos_key 是否为空
     if not audio_nos_key or not audio_nos_key.strip():
         raise HTTPException(status_code=400, detail="audioNosKey 参数不能为空")
+    if not task_id or not task_id.strip():
+        raise HTTPException(status_code=400, detail="taskId 参数不能为空")
 
     # 获取文件名，如果没有后缀则添加 .mp3 后缀
     audio_filename = audio_nos_key.split('/')[-1]
@@ -340,9 +344,7 @@ async def asr_recognize(request: ASRRequest = Body(...)):
     if download_success is not True:
         logger.error(f"文件下载失败，audioNosKey: {audio_nos_key}, 目标路径:{audio_path}")
         raise HTTPException(status_code=500, detail=f"文件下载失败: {audio_nos_key}")
-    
-    logger.info(f"文件下载成功: {audio_path}")
-    
+
     # 定义异步删除文件的函数
     async def delete_file_async(file_path: str):
         """异步删除文件"""
@@ -350,7 +352,7 @@ async def asr_recognize(request: ASRRequest = Body(...)):
         try:
             if os.path.exists(file_path):
                 os.remove(file_path)
-                logger.info(f"已删除临时文件: {file_path}")
+                # logger.info(f"已删除临时文件: {file_path}")
         except Exception as e:
             logger.error(f"删除文件失败: {file_path}, 错误: {e}")
     
@@ -371,6 +373,7 @@ async def asr_recognize(request: ASRRequest = Body(...)):
         
         # 添加总耗时到返回结果
         result["total_elapsed_time"] = round(total_elapsed_time, 3)
+        result["task_id"] = task_id
         
         return JSONResponse(content=result)
         
